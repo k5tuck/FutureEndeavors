@@ -1,4 +1,4 @@
-# Initial Plan - Succinct
+# Initial Plan
 
 ## Company Name & Logo Description
 

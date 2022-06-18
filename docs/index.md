@@ -1,17 +1,13 @@
-# Welcome to MkDocs
+# Welcome to Future Endeavors
 
-For full documentation visit [mkdocs.org](https://www.mkdocs.org).
+Picture Soon to Come
+## Current Business Plans
 
-## Commands
+* Aluecian - 
+* Arazbus - 
+* Inzed - 
+* Shiplem Studios - 
+* Vinusian - 
 
-* `mkdocs new [dir-name]` - Create a new project.
-* `mkdocs serve` - Start the live-reloading docs server.
-* `mkdocs build` - Build the documentation site.
-* `mkdocs -h` - Print help message and exit.
 
-## Project layout
-
-    mkdocs.yml    # The configuration file.
-    docs/
-        index.md  # The documentation homepage.
-        ...       # Other markdown pages, images and other files.
+<center>For Full MkDocs Documentation Visit [mkdocs.org](https://www.mkdocs.org)</center>
