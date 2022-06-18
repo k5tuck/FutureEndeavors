@@ -1,0 +1,25 @@
+site_name: Future Endeavors
+site_url: https://k5tuck.github.io/FutureEndeavors
+site_author: Kevin Tucker
+copyright: 2022 &copy Copyright FutureEndeavors by Kevin Tucker
+nav: 
+  - Home: index.md
+  - Aluecian: 
+    - Home: Companies/Aluecian/aluecian_index.md
+    - Initial Plan: Companies/Aluecian/Docs/Aluecian_InitialPlan.md
+  - Arazbus: 
+    - Home: Companies/Arazbus/arazbus_index.md
+    - Initial Plan: Companies/Arazbus/Docs/Arazbus_InitialPlan.md
+  - Shiplem Studios: 
+    - Home: Companies/ShiplemStudios/shiplem_index.md
+    - Initial Plan: Companies/ShiplemStudios/Docs/ShiplemStudios_InitialPlan.md
+  - Inzed: 
+    - Home: Companies/Inzed/inzed_index.md
+    - Initial Plan: Companies/Inzed/Docs/Inzed_InitialPlan.md
+  - Vinusian: 
+    - Home: Companies/Vinusian/vinusian_index.md
+    - Initial Plan: Companies/Vinusian/Docs/Vinusian_InitialPlan.md
+theme: 
+  name: material
+  locale: en
+  include_sidebar: true
