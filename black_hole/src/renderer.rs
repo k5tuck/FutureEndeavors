@@ -152,13 +152,13 @@ impl Renderer2D {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_line"),
+                entry_point: "vs_line",
                 buffers: &[LineVertex::layout()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_line"),
+                entry_point: "fs_line",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: ctx.config.format,
                     blend: Some(wgpu::BlendState {
@@ -185,7 +185,6 @@ impl Renderer2D {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-            cache: None,
         });
 
         // Circle pipeline (for event horizon)
@@ -194,13 +193,13 @@ impl Renderer2D {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_circle"),
+                entry_point: "vs_circle",
                 buffers: &[],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_circle"),
+                entry_point: "fs_circle",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: ctx.config.format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -220,7 +219,6 @@ impl Renderer2D {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-            cache: None,
         });
 
         // Line vertex buffer
@@ -421,13 +419,13 @@ impl Renderer3D {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_fullscreen"),
+                entry_point: "vs_fullscreen",
                 buffers: &[],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_main"),
+                entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: ctx.config.format,
                     blend: None,
@@ -447,7 +445,6 @@ impl Renderer3D {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-            cache: None,
         });
 
         Self {

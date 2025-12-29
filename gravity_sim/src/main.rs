@@ -15,11 +15,13 @@
 
 mod physics;
 mod renderer;
+mod equations_ui;
 
 use common::{Camera2D, GraphicsContext};
 use glam::Vec3;
 use physics::Simulation;
 use renderer::Renderer;
+use equations_ui::{draw_equations_sidebar, GRAVITY_EQUATIONS, GRAVITY_VARIABLES};
 use winit::{
     event::{ElementState, Event, KeyEvent, MouseScrollDelta, WindowEvent},
     event_loop::ControlFlow,
@@ -28,6 +30,12 @@ use winit::{
 
 const MAX_PARTICLES: usize = 2000;
 
+struct EguiState {
+    ctx: egui::Context,
+    state: egui_winit::State,
+    renderer: egui_wgpu::Renderer,
+}
+
 struct App {
     ctx: GraphicsContext,
     renderer: Renderer,
@@ -35,6 +43,7 @@ struct App {
     camera: Camera2D,
     paused: bool,
     current_preset: u8,
+    egui: EguiState,
 }
 
 impl App {
@@ -48,6 +57,21 @@ impl App {
         let mut camera = camera;
         camera.zoom = 15.0;
 
+        let egui_ctx = egui::Context::default();
+        let egui_state = egui_winit::State::new(
+            egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            &ctx.window,
+            Some(ctx.window.scale_factor() as f32),
+            None,
+        );
+        let egui_renderer = egui_wgpu::Renderer::new(
+            &ctx.device,
+            ctx.config.format,
+            None,
+            1,
+        );
+
         Self {
             ctx,
             renderer,
@@ -55,6 +79,11 @@ impl App {
             camera,
             paused: false,
             current_preset: 1,
+            egui: EguiState {
+                ctx: egui_ctx,
+                state: egui_state,
+                renderer: egui_renderer,
+            },
         }
     }
 
@@ -63,11 +92,11 @@ impl App {
         self.camera.update_aspect_ratio(self.ctx.aspect_ratio());
     }
 
-    fn update(&mut self, dt: f32) {
+    fn update(&mut self, _dt: f32) {
         if !self.paused {
             // Substep for stability
             let substeps = 4;
-            let sub_dt = dt / substeps as f32;
+            let sub_dt = _dt / substeps as f32;
             for _ in 0..substeps {
                 self.simulation.step(sub_dt);
             }
@@ -85,6 +114,48 @@ impl App {
         self.renderer
             .update_instances(&self.ctx.queue, &self.simulation.bodies);
 
+        // Build egui UI
+        let raw_input = self.egui.state.take_egui_input(&self.ctx.window);
+        let full_output = self.egui.ctx.run(raw_input, |ctx| {
+            draw_equations_sidebar(
+                ctx,
+                "Gravity Simulation",
+                GRAVITY_EQUATIONS,
+                GRAVITY_VARIABLES,
+            );
+
+            egui::TopBottomPanel::top("status").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Bodies: {}", self.simulation.bodies.len()));
+                    ui.separator();
+                    let preset_name = match self.current_preset {
+                        1 => "Solar System",
+                        2 => "Accretion Disk",
+                        3 => "Galaxy Collision",
+                        _ => "Custom",
+                    };
+                    ui.label(format!("Preset: {}", preset_name));
+                    ui.separator();
+                    if self.paused {
+                        ui.label(egui::RichText::new("PAUSED").color(egui::Color32::YELLOW));
+                    } else {
+                        ui.label(egui::RichText::new("RUNNING").color(egui::Color32::GREEN));
+                    }
+                });
+            });
+        });
+
+        self.egui.state.handle_platform_output(&self.ctx.window, full_output.platform_output);
+        let tris = self.egui.ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        for (id, image_delta) in &full_output.textures_delta.set {
+            self.egui.renderer.update_texture(&self.ctx.device, &self.ctx.queue, *id, image_delta);
+        }
+
+        let screen_descriptor = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [self.ctx.size.width, self.ctx.size.height],
+            pixels_per_point: full_output.pixels_per_point,
+        };
+
         let mut encoder = self
             .ctx
             .device
@@ -94,6 +165,35 @@ impl App {
 
         self.renderer
             .render(&mut encoder, &view, self.simulation.bodies.len() as u32);
+
+        self.egui.renderer.update_buffers(
+            &self.ctx.device,
+            &self.ctx.queue,
+            &mut encoder,
+            &tris,
+            &screen_descriptor,
+        );
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Egui Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            self.egui.renderer.render(&mut render_pass, &tris, &screen_descriptor);
+        }
+
+        for id in &full_output.textures_delta.free {
+            self.egui.renderer.free_texture(id);
+        }
 
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
         output.present();
@@ -146,6 +246,10 @@ impl App {
             _ => {}
         }
     }
+
+    fn handle_window_event(&mut self, event: &WindowEvent) -> bool {
+        self.egui.state.on_window_event(&self.ctx.window, event).consumed
+    }
 }
 
 fn main() {
@@ -163,40 +267,46 @@ fn main() {
             elwt.set_control_flow(ControlFlow::Poll);
 
             match event {
-                Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::CloseRequested => elwt.exit(),
-                    WindowEvent::Resized(size) => app.resize(size),
-                    WindowEvent::KeyboardInput {
-                        event:
-                            KeyEvent {
-                                physical_key: PhysicalKey::Code(key),
-                                state,
-                                ..
-                            },
-                        ..
-                    } => app.handle_key(key, state),
-                    WindowEvent::MouseWheel { delta, .. } => {
-                        let scroll = match delta {
-                            MouseScrollDelta::LineDelta(_, y) => y,
-                            MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 100.0,
-                        };
-                        app.handle_scroll(scroll);
-                    }
-                    WindowEvent::RedrawRequested => {
-                        let now = std::time::Instant::now();
-                        let dt = (now - last_time).as_secs_f32().min(0.1);
-                        last_time = now;
+                Event::WindowEvent { ref event, .. } => {
+                    let consumed = app.handle_window_event(event);
 
-                        app.update(dt);
-                        match app.render() {
-                            Ok(_) => {}
-                            Err(wgpu::SurfaceError::Lost) => app.resize(app.ctx.size),
-                            Err(wgpu::SurfaceError::OutOfMemory) => elwt.exit(),
-                            Err(e) => eprintln!("Render error: {:?}", e),
+                    if !consumed {
+                        match event {
+                            WindowEvent::CloseRequested => elwt.exit(),
+                            WindowEvent::Resized(size) => app.resize(*size),
+                            WindowEvent::KeyboardInput {
+                                event:
+                                    KeyEvent {
+                                        physical_key: PhysicalKey::Code(key),
+                                        state,
+                                        ..
+                                    },
+                                ..
+                            } => app.handle_key(*key, *state),
+                            WindowEvent::MouseWheel { delta, .. } => {
+                                let scroll = match delta {
+                                    MouseScrollDelta::LineDelta(_, y) => *y,
+                                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 100.0,
+                                };
+                                app.handle_scroll(scroll);
+                            }
+                            WindowEvent::RedrawRequested => {
+                                let now = std::time::Instant::now();
+                                let dt = (now - last_time).as_secs_f32().min(0.1);
+                                last_time = now;
+
+                                app.update(dt);
+                                match app.render() {
+                                    Ok(_) => {}
+                                    Err(wgpu::SurfaceError::Lost) => app.resize(app.ctx.size),
+                                    Err(wgpu::SurfaceError::OutOfMemory) => elwt.exit(),
+                                    Err(e) => eprintln!("Render error: {:?}", e),
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    _ => {}
-                },
+                }
                 Event::AboutToWait => {
                     app.ctx.window.request_redraw();
                 }

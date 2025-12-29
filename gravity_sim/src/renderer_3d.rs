@@ -180,13 +180,13 @@ impl Renderer3D {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_particle_3d"),
+                entry_point: "vs_particle_3d",
                 buffers: &[QuadVertex::layout(), ParticleInstance::layout()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_particle_3d"),
+                entry_point: "fs_particle_3d",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: ctx.config.format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -201,7 +201,6 @@ impl Renderer3D {
             depth_stencil: depth_stencil_state.clone(),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-            cache: None,
         });
 
         // Trail pipeline
@@ -210,13 +209,13 @@ impl Renderer3D {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_trail"),
+                entry_point: "vs_trail",
                 buffers: &[TrailVertex::layout()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_trail"),
+                entry_point: "fs_trail",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: ctx.config.format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -231,7 +230,6 @@ impl Renderer3D {
             depth_stencil: depth_stencil_state.clone(),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-            cache: None,
         });
 
         // Grid pipeline
@@ -240,13 +238,13 @@ impl Renderer3D {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_grid"),
+                entry_point: "vs_grid",
                 buffers: &[],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_grid"),
+                entry_point: "fs_grid",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: ctx.config.format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -261,7 +259,6 @@ impl Renderer3D {
             depth_stencil: depth_stencil_state.clone(),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-            cache: None,
         });
 
         // Skybox pipeline
@@ -270,13 +267,13 @@ impl Renderer3D {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_skybox"),
+                entry_point: "vs_skybox",
                 buffers: &[],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_skybox"),
+                entry_point: "fs_skybox",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: ctx.config.format,
                     blend: None,
@@ -291,7 +288,6 @@ impl Renderer3D {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-            cache: None,
         });
 
         // Buffers

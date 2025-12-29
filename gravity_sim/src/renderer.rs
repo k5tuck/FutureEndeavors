@@ -123,13 +123,13 @@ impl Renderer {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_instanced"),
+                entry_point: "vs_instanced",
                 buffers: &[QuadVertex::layout(), ParticleInstance::layout()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_instanced"),
+                entry_point: "fs_instanced",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: ctx.config.format,
                     blend: Some(wgpu::BlendState {
@@ -156,7 +156,6 @@ impl Renderer {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-            cache: None,
         });
 
         // Quad vertex buffer
