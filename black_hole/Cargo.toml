@@ -1,0 +1,25 @@
+[package]
+name = "black_hole"
+version.workspace = true
+edition.workspace = true
+description = "Black hole simulation with gravitational lensing and ray tracing"
+
+[[bin]]
+name = "black_hole"
+path = "src/main.rs"
+
+[[bin]]
+name = "black_hole_2d"
+path = "src/main_2d.rs"
+
+[dependencies]
+common.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+glam.workspace = true
+nalgebra.workspace = true
+bytemuck.workspace = true
+pollster.workspace = true
+env_logger.workspace = true
+log.workspace = true
+rand.workspace = true

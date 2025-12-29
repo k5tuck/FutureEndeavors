@@ -1,6 +1,0 @@
----
-hide:
-  - footer
----
-
-# Inzed
