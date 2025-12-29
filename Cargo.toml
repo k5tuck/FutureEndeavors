@@ -6,6 +6,7 @@ members = [
     "atoms",
     "solar_voyage",
     "common",
+    "quantum_sim",
 ]
 
 [workspace.package]

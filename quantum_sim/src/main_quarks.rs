@@ -1,34 +1,36 @@
-//! 2D N-body Gravity Simulation
+//! Quark and Hadron Visualization
 //!
-//! A real-time gravitational simulation using Newtonian physics,
-//! rendered with wgpu. Features include:
-//! - N-body gravitational interactions
-//! - Multiple preset configurations (solar system, disk, galaxy collision)
-//! - Interactive camera controls
+//! Simulates quarks, color charge, and QCD confinement.
 //!
 //! Controls:
-//! - Scroll: Zoom in/out
-//! - Arrow keys / WASD: Pan camera
-//! - Space: Pause/resume simulation
-//! - 1/2/3: Load different presets
-//! - R: Reset current simulation
+//! - 1: Proton (uud)
+//! - 2: Neutron (udd)
+//! - 3: Pion+ (ud̄)
+//! - 4: J/ψ (cc̄)
+//! - Space: Pause/resume
+//! - Arrow keys: Rotate view
 
-mod physics;
+mod wavefunction;
+mod quantum_state;
+mod tunneling;
+mod orbitals;
+mod teleportation;
+mod quarks;
+mod hall_effect;
+mod hypercube;
 mod renderer;
 mod equations_ui;
 
-use common::{Camera2D, GraphicsContext};
+use common::{Camera3D, GraphicsContext};
 use glam::Vec3;
-use physics::Simulation;
-use renderer::Renderer;
-use equations_ui::{draw_equations_sidebar, GRAVITY_EQUATIONS, GRAVITY_VARIABLES};
+use quarks::QuarkSimulation;
+use renderer::{QuantumRenderer, PointInstance, quarks_to_points};
+use equations_ui::{draw_equations_sidebar, QUARK_EQUATIONS, QUARK_VARIABLES};
 use winit::{
     event::{ElementState, Event, KeyEvent, MouseScrollDelta, WindowEvent},
     event_loop::ControlFlow,
     keyboard::{KeyCode, PhysicalKey},
 };
-
-const MAX_PARTICLES: usize = 2000;
 
 struct EguiState {
     ctx: egui::Context,
@@ -38,24 +40,21 @@ struct EguiState {
 
 struct App {
     ctx: GraphicsContext,
-    renderer: Renderer,
-    simulation: Simulation,
-    camera: Camera2D,
+    renderer: QuantumRenderer,
+    simulation: QuarkSimulation,
+    camera: Camera3D,
     paused: bool,
-    current_preset: u8,
     egui: EguiState,
 }
 
 impl App {
     fn new(ctx: GraphicsContext) -> Self {
-        let renderer = Renderer::new(&ctx, MAX_PARTICLES);
-        let camera = Camera2D::new(ctx.aspect_ratio());
+        let renderer = QuantumRenderer::new(&ctx, 100, 200);
+        let mut camera = Camera3D::new(ctx.aspect_ratio());
+        camera.distance = 5.0;
 
-        let mut simulation = Simulation::new();
-        simulation.init_solar_system();
-
-        let mut camera = camera;
-        camera.zoom = 15.0;
+        let mut simulation = QuarkSimulation::new();
+        simulation.init_proton();
 
         let egui_ctx = egui::Context::default();
         let egui_state = egui_winit::State::new(
@@ -78,7 +77,6 @@ impl App {
             simulation,
             camera,
             paused: false,
-            current_preset: 1,
             egui: EguiState {
                 ctx: egui_ctx,
                 state: egui_state,
@@ -92,14 +90,9 @@ impl App {
         self.camera.update_aspect_ratio(self.ctx.aspect_ratio());
     }
 
-    fn update(&mut self, _dt: f32) {
+    fn update(&mut self, dt: f32) {
         if !self.paused {
-            // Substep for stability
-            let substeps = 4;
-            let sub_dt = _dt / substeps as f32;
-            for _ in 0..substeps {
-                self.simulation.step(sub_dt);
-            }
+            self.simulation.step(dt);
         }
     }
 
@@ -109,37 +102,55 @@ impl App {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Update GPU buffers
-        self.renderer.update_camera(&self.ctx.queue, &self.camera);
-        self.renderer
-            .update_instances(&self.ctx.queue, &self.simulation.bodies);
+        self.renderer.update_camera_3d(&self.ctx.queue, &self.camera);
+
+        let quark_data = self.simulation.get_quark_data();
+        let points = quarks_to_points(&quark_data);
+        self.renderer.update_points(&self.ctx.queue, &points);
+
+        let mut lines: Vec<(Vec3, Vec3, [f32; 4])> = Vec::new();
+        for tube in &self.simulation.flux_tubes {
+            let p1 = self.simulation.quarks[tube.quark_a].position;
+            let p2 = self.simulation.quarks[tube.quark_b].position;
+            lines.push((p1, p2, tube.color_flow));
+        }
+
+        for gluon in &self.simulation.gluons {
+            let color = [
+                (gluon.color.render_color()[0] + gluon.anticolor.render_color()[0]) / 2.0,
+                (gluon.color.render_color()[1] + gluon.anticolor.render_color()[1]) / 2.0,
+                (gluon.color.render_color()[2] + gluon.anticolor.render_color()[2]) / 2.0,
+                0.6,
+            ];
+            lines.push((
+                gluon.position - gluon.velocity.normalize() * 0.1,
+                gluon.position + gluon.velocity.normalize() * 0.1,
+                color,
+            ));
+        }
+
+        self.renderer.update_lines(&self.ctx.queue, &lines);
 
         // Build egui UI
         let raw_input = self.egui.state.take_egui_input(&self.ctx.window);
+        let hadron_name = self.simulation.hadron_type.map(|h| h.name()).unwrap_or("None");
         let full_output = self.egui.ctx.run(raw_input, |ctx| {
             draw_equations_sidebar(
                 ctx,
-                "Gravity Simulation",
-                GRAVITY_EQUATIONS,
-                GRAVITY_VARIABLES,
+                "Quarks & QCD",
+                QUARK_EQUATIONS,
+                QUARK_VARIABLES,
             );
 
             egui::TopBottomPanel::top("status").show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(format!("Bodies: {}", self.simulation.bodies.len()));
+                    ui.label(format!("Hadron: {}", hadron_name));
                     ui.separator();
-                    let preset_name = match self.current_preset {
-                        1 => "Solar System",
-                        2 => "Accretion Disk",
-                        3 => "Galaxy Collision",
-                        _ => "Custom",
-                    };
-                    ui.label(format!("Preset: {}", preset_name));
+                    ui.label(format!("Quarks: {}", self.simulation.quarks.len()));
                     ui.separator();
+                    ui.label(format!("Gluons: {}", self.simulation.gluons.len()));
                     if self.paused {
                         ui.label(egui::RichText::new("PAUSED").color(egui::Color32::YELLOW));
-                    } else {
-                        ui.label(egui::RichText::new("RUNNING").color(egui::Color32::GREEN));
                     }
                 });
             });
@@ -164,7 +175,9 @@ impl App {
             });
 
         self.renderer
-            .render(&mut encoder, &view, self.simulation.bodies.len() as u32);
+            .render_lines(&mut encoder, &view, lines.len() as u32, true);
+        self.renderer
+            .render_points(&mut encoder, &view, points.len() as u32, false);
 
         self.egui.renderer.update_buffers(
             &self.ctx.device,
@@ -208,43 +221,20 @@ impl App {
 
         match key {
             KeyCode::Space => self.paused = !self.paused,
-            KeyCode::KeyR => self.load_preset(self.current_preset),
-            KeyCode::Digit1 => self.load_preset(1),
-            KeyCode::Digit2 => self.load_preset(2),
-            KeyCode::Digit3 => self.load_preset(3),
-            KeyCode::ArrowUp | KeyCode::KeyW => self.camera.position.y += self.camera.zoom * 0.1,
-            KeyCode::ArrowDown | KeyCode::KeyS => self.camera.position.y -= self.camera.zoom * 0.1,
-            KeyCode::ArrowLeft | KeyCode::KeyA => self.camera.position.x -= self.camera.zoom * 0.1,
-            KeyCode::ArrowRight | KeyCode::KeyD => self.camera.position.x += self.camera.zoom * 0.1,
+            KeyCode::Digit1 => self.simulation.init_proton(),
+            KeyCode::Digit2 => self.simulation.init_neutron(),
+            KeyCode::Digit3 => self.simulation.init_pion_plus(),
+            KeyCode::Digit4 => self.simulation.init_jpsi(),
+            KeyCode::ArrowLeft => self.camera.orbit(-0.1, 0.0),
+            KeyCode::ArrowRight => self.camera.orbit(0.1, 0.0),
+            KeyCode::ArrowUp => self.camera.orbit(0.0, 0.1),
+            KeyCode::ArrowDown => self.camera.orbit(0.0, -0.1),
             _ => {}
         }
     }
 
     fn handle_scroll(&mut self, delta: f32) {
-        self.camera.zoom *= 1.0 - delta * 0.1;
-        self.camera.zoom = self.camera.zoom.clamp(1.0, 100.0);
-    }
-
-    fn load_preset(&mut self, preset: u8) {
-        self.current_preset = preset;
-        match preset {
-            1 => {
-                self.simulation.init_solar_system();
-                self.camera.zoom = 15.0;
-                self.camera.position = Vec3::ZERO;
-            }
-            2 => {
-                self.simulation.init_disk(500);
-                self.camera.zoom = 20.0;
-                self.camera.position = Vec3::ZERO;
-            }
-            3 => {
-                self.simulation.init_galaxy_collision(300);
-                self.camera.zoom = 25.0;
-                self.camera.position = Vec3::ZERO;
-            }
-            _ => {}
-        }
+        self.camera.zoom(delta);
     }
 
     fn handle_window_event(&mut self, event: &WindowEvent) -> bool {
@@ -254,7 +244,7 @@ impl App {
 
 fn main() {
     let (ctx, event_loop) = pollster::block_on(GraphicsContext::new(
-        "Gravity Simulation - Rust/wgpu",
+        "Quarks & Hadrons - QCD Visualization",
         1280,
         720,
     ));

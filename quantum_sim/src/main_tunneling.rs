@@ -1,34 +1,33 @@
-//! 2D N-body Gravity Simulation
+//! Quantum Tunneling Visualization
 //!
-//! A real-time gravitational simulation using Newtonian physics,
-//! rendered with wgpu. Features include:
-//! - N-body gravitational interactions
-//! - Multiple preset configurations (solar system, disk, galaxy collision)
-//! - Interactive camera controls
+//! Demonstrates wave packet transmission through potential barriers.
 //!
 //! Controls:
-//! - Scroll: Zoom in/out
-//! - Arrow keys / WASD: Pan camera
-//! - Space: Pause/resume simulation
-//! - 1/2/3: Load different presets
-//! - R: Reset current simulation
+//! - Space: Pause/resume
+//! - 1/2/3: Switch presets (single barrier, double barrier, step)
+//! - R: Reset simulation
+//! - Arrow keys: Pan camera
 
-mod physics;
+mod wavefunction;
+mod quantum_state;
+mod tunneling;
+mod orbitals;
+mod teleportation;
+mod quarks;
+mod hall_effect;
+mod hypercube;
 mod renderer;
 mod equations_ui;
 
 use common::{Camera2D, GraphicsContext};
-use glam::Vec3;
-use physics::Simulation;
-use renderer::Renderer;
-use equations_ui::{draw_equations_sidebar, GRAVITY_EQUATIONS, GRAVITY_VARIABLES};
+use tunneling::{Barrier, TunnelingSimulation};
+use renderer::{QuantumRenderer, PointInstance};
+use equations_ui::{draw_equations_sidebar, TUNNELING_EQUATIONS, TUNNELING_VARIABLES};
 use winit::{
-    event::{ElementState, Event, KeyEvent, MouseScrollDelta, WindowEvent},
+    event::{ElementState, Event, KeyEvent, WindowEvent},
     event_loop::ControlFlow,
     keyboard::{KeyCode, PhysicalKey},
 };
-
-const MAX_PARTICLES: usize = 2000;
 
 struct EguiState {
     ctx: egui::Context,
@@ -38,8 +37,8 @@ struct EguiState {
 
 struct App {
     ctx: GraphicsContext,
-    renderer: Renderer,
-    simulation: Simulation,
+    renderer: QuantumRenderer,
+    simulation: TunnelingSimulation,
     camera: Camera2D,
     paused: bool,
     current_preset: u8,
@@ -48,15 +47,13 @@ struct App {
 
 impl App {
     fn new(ctx: GraphicsContext) -> Self {
-        let renderer = Renderer::new(&ctx, MAX_PARTICLES);
-        let camera = Camera2D::new(ctx.aspect_ratio());
+        let renderer = QuantumRenderer::new(&ctx, 1024, 100);
+        let mut camera = Camera2D::new(ctx.aspect_ratio());
+        camera.zoom = 12.0;
 
-        let mut simulation = Simulation::new();
-        simulation.init_solar_system();
+        let simulation = TunnelingSimulation::preset_single_barrier();
 
-        let mut camera = camera;
-        camera.zoom = 15.0;
-
+        // Initialize egui
         let egui_ctx = egui::Context::default();
         let egui_state = egui_winit::State::new(
             egui_ctx.clone(),
@@ -92,13 +89,11 @@ impl App {
         self.camera.update_aspect_ratio(self.ctx.aspect_ratio());
     }
 
-    fn update(&mut self, _dt: f32) {
+    fn update(&mut self, dt: f32) {
         if !self.paused {
-            // Substep for stability
-            let substeps = 4;
-            let sub_dt = _dt / substeps as f32;
+            let substeps = 20;
             for _ in 0..substeps {
-                self.simulation.step(sub_dt);
+                self.simulation.step();
             }
         }
     }
@@ -109,37 +104,67 @@ impl App {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Update GPU buffers
-        self.renderer.update_camera(&self.ctx.queue, &self.camera);
-        self.renderer
-            .update_instances(&self.ctx.queue, &self.simulation.bodies);
+        self.renderer.update_camera_2d(&self.ctx.queue, &self.camera);
+
+        // Convert wavefunction data to points
+        let render_data = self.simulation.get_render_data();
+        let points: Vec<PointInstance> = render_data
+            .iter()
+            .map(|(x, prob, _potential, color)| {
+                let y = prob.sqrt() * 3.0;
+                PointInstance {
+                    position: [*x, y, 0.0],
+                    size: 0.08,
+                    color: *color,
+                }
+            })
+            .collect();
+
+        // Add potential barrier visualization
+        let potential = self.simulation.potential_profile();
+        let mut barrier_points: Vec<PointInstance> = potential
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| **v > 0.1)
+            .map(|(i, v)| {
+                let x = self.simulation.wavefunction.x_at(i);
+                PointInstance {
+                    position: [x, v / 5.0, 0.0],
+                    size: 0.1,
+                    color: [0.5, 0.5, 0.5, 0.5],
+                }
+            })
+            .collect();
+
+        let mut all_points = points;
+        all_points.append(&mut barrier_points);
+
+        self.renderer.update_points(&self.ctx.queue, &all_points);
 
         // Build egui UI
         let raw_input = self.egui.state.take_egui_input(&self.ctx.window);
         let full_output = self.egui.ctx.run(raw_input, |ctx| {
             draw_equations_sidebar(
                 ctx,
-                "Gravity Simulation",
-                GRAVITY_EQUATIONS,
-                GRAVITY_VARIABLES,
+                "Quantum Tunneling",
+                TUNNELING_EQUATIONS,
+                TUNNELING_VARIABLES,
             );
 
+            // Status panel at top
             egui::TopBottomPanel::top("status").show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(format!("Bodies: {}", self.simulation.bodies.len()));
+                    ui.label(format!("Preset: {}", match self.current_preset {
+                        1 => "Single Barrier",
+                        2 => "Double Barrier (Resonant)",
+                        3 => "Step Potential",
+                        _ => "Unknown",
+                    }));
                     ui.separator();
-                    let preset_name = match self.current_preset {
-                        1 => "Solar System",
-                        2 => "Accretion Disk",
-                        3 => "Galaxy Collision",
-                        _ => "Custom",
-                    };
-                    ui.label(format!("Preset: {}", preset_name));
-                    ui.separator();
+                    ui.label(format!("T = {:.3}", self.simulation.transmission));
+                    ui.label(format!("R = {:.3}", self.simulation.reflection));
                     if self.paused {
                         ui.label(egui::RichText::new("PAUSED").color(egui::Color32::YELLOW));
-                    } else {
-                        ui.label(egui::RichText::new("RUNNING").color(egui::Color32::GREEN));
                     }
                 });
             });
@@ -164,8 +189,9 @@ impl App {
             });
 
         self.renderer
-            .render(&mut encoder, &view, self.simulation.bodies.len() as u32);
+            .render_points(&mut encoder, &view, all_points.len() as u32, true);
 
+        // Render egui
         self.egui.renderer.update_buffers(
             &self.ctx.device,
             &self.ctx.queue,
@@ -212,39 +238,22 @@ impl App {
             KeyCode::Digit1 => self.load_preset(1),
             KeyCode::Digit2 => self.load_preset(2),
             KeyCode::Digit3 => self.load_preset(3),
-            KeyCode::ArrowUp | KeyCode::KeyW => self.camera.position.y += self.camera.zoom * 0.1,
-            KeyCode::ArrowDown | KeyCode::KeyS => self.camera.position.y -= self.camera.zoom * 0.1,
-            KeyCode::ArrowLeft | KeyCode::KeyA => self.camera.position.x -= self.camera.zoom * 0.1,
-            KeyCode::ArrowRight | KeyCode::KeyD => self.camera.position.x += self.camera.zoom * 0.1,
+            KeyCode::ArrowUp => self.camera.position.y += self.camera.zoom * 0.1,
+            KeyCode::ArrowDown => self.camera.position.y -= self.camera.zoom * 0.1,
+            KeyCode::ArrowLeft => self.camera.position.x -= self.camera.zoom * 0.1,
+            KeyCode::ArrowRight => self.camera.position.x += self.camera.zoom * 0.1,
             _ => {}
         }
-    }
-
-    fn handle_scroll(&mut self, delta: f32) {
-        self.camera.zoom *= 1.0 - delta * 0.1;
-        self.camera.zoom = self.camera.zoom.clamp(1.0, 100.0);
     }
 
     fn load_preset(&mut self, preset: u8) {
         self.current_preset = preset;
-        match preset {
-            1 => {
-                self.simulation.init_solar_system();
-                self.camera.zoom = 15.0;
-                self.camera.position = Vec3::ZERO;
-            }
-            2 => {
-                self.simulation.init_disk(500);
-                self.camera.zoom = 20.0;
-                self.camera.position = Vec3::ZERO;
-            }
-            3 => {
-                self.simulation.init_galaxy_collision(300);
-                self.camera.zoom = 25.0;
-                self.camera.position = Vec3::ZERO;
-            }
-            _ => {}
-        }
+        self.simulation = match preset {
+            1 => TunnelingSimulation::preset_single_barrier(),
+            2 => TunnelingSimulation::preset_resonant_tunneling(),
+            3 => TunnelingSimulation::preset_step_potential(),
+            _ => TunnelingSimulation::preset_single_barrier(),
+        };
     }
 
     fn handle_window_event(&mut self, event: &WindowEvent) -> bool {
@@ -254,7 +263,7 @@ impl App {
 
 fn main() {
     let (ctx, event_loop) = pollster::block_on(GraphicsContext::new(
-        "Gravity Simulation - Rust/wgpu",
+        "Quantum Tunneling - Wave Packet Simulation",
         1280,
         720,
     ));
@@ -283,13 +292,6 @@ fn main() {
                                     },
                                 ..
                             } => app.handle_key(*key, *state),
-                            WindowEvent::MouseWheel { delta, .. } => {
-                                let scroll = match delta {
-                                    MouseScrollDelta::LineDelta(_, y) => *y,
-                                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 100.0,
-                                };
-                                app.handle_scroll(scroll);
-                            }
                             WindowEvent::RedrawRequested => {
                                 let now = std::time::Instant::now();
                                 let dt = (now - last_time).as_secs_f32().min(0.1);

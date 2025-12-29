@@ -226,6 +226,11 @@ impl Spaceship {
         1.0 / self.gamma
     }
 
+    /// Get the Lorentz factor (gamma)
+    pub fn lorentz_factor(&self) -> f32 {
+        self.gamma
+    }
+
     /// Get info string for HUD
     pub fn info_string(&self) -> String {
         format!(

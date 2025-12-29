@@ -1,34 +1,35 @@
-//! 2D N-body Gravity Simulation
+//! Quantum Teleportation Visualization
 //!
-//! A real-time gravitational simulation using Newtonian physics,
-//! rendered with wgpu. Features include:
-//! - N-body gravitational interactions
-//! - Multiple preset configurations (solar system, disk, galaxy collision)
-//! - Interactive camera controls
+//! Interactive demonstration of the quantum teleportation protocol.
 //!
 //! Controls:
-//! - Scroll: Zoom in/out
-//! - Arrow keys / WASD: Pan camera
-//! - Space: Pause/resume simulation
-//! - 1/2/3: Load different presets
-//! - R: Reset current simulation
+//! - Enter/Space: Advance to next stage
+//! - R: Reset simulation
+//! - 1-4: Set different initial states to teleport
+//! - Arrow keys: Rotate view
 
-mod physics;
+mod wavefunction;
+mod quantum_state;
+mod tunneling;
+mod orbitals;
+mod teleportation;
+mod quarks;
+mod hall_effect;
+mod hypercube;
 mod renderer;
 mod equations_ui;
 
-use common::{Camera2D, GraphicsContext};
+use common::{Camera3D, GraphicsContext};
 use glam::Vec3;
-use physics::Simulation;
-use renderer::Renderer;
-use equations_ui::{draw_equations_sidebar, GRAVITY_EQUATIONS, GRAVITY_VARIABLES};
+use teleportation::TeleportationSimulation;
+use renderer::{QuantumRenderer, PointInstance};
+use equations_ui::{draw_equations_sidebar, TELEPORTATION_EQUATIONS, TELEPORTATION_VARIABLES};
 use winit::{
     event::{ElementState, Event, KeyEvent, MouseScrollDelta, WindowEvent},
     event_loop::ControlFlow,
     keyboard::{KeyCode, PhysicalKey},
 };
-
-const MAX_PARTICLES: usize = 2000;
+use std::f32::consts::PI;
 
 struct EguiState {
     ctx: egui::Context,
@@ -38,24 +39,20 @@ struct EguiState {
 
 struct App {
     ctx: GraphicsContext,
-    renderer: Renderer,
-    simulation: Simulation,
-    camera: Camera2D,
-    paused: bool,
-    current_preset: u8,
+    renderer: QuantumRenderer,
+    simulation: TeleportationSimulation,
+    camera: Camera3D,
     egui: EguiState,
 }
 
 impl App {
     fn new(ctx: GraphicsContext) -> Self {
-        let renderer = Renderer::new(&ctx, MAX_PARTICLES);
-        let camera = Camera2D::new(ctx.aspect_ratio());
+        let renderer = QuantumRenderer::new(&ctx, 100, 50);
+        let mut camera = Camera3D::new(ctx.aspect_ratio());
+        camera.distance = 12.0;
+        camera.pitch = 0.3;
 
-        let mut simulation = Simulation::new();
-        simulation.init_solar_system();
-
-        let mut camera = camera;
-        camera.zoom = 15.0;
+        let simulation = TeleportationSimulation::new();
 
         let egui_ctx = egui::Context::default();
         let egui_state = egui_winit::State::new(
@@ -77,8 +74,6 @@ impl App {
             renderer,
             simulation,
             camera,
-            paused: false,
-            current_preset: 1,
             egui: EguiState {
                 ctx: egui_ctx,
                 state: egui_state,
@@ -92,15 +87,8 @@ impl App {
         self.camera.update_aspect_ratio(self.ctx.aspect_ratio());
     }
 
-    fn update(&mut self, _dt: f32) {
-        if !self.paused {
-            // Substep for stability
-            let substeps = 4;
-            let sub_dt = _dt / substeps as f32;
-            for _ in 0..substeps {
-                self.simulation.step(sub_dt);
-            }
-        }
+    fn update(&mut self, dt: f32) {
+        self.simulation.step(dt);
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -109,38 +97,58 @@ impl App {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Update GPU buffers
-        self.renderer.update_camera(&self.ctx.queue, &self.camera);
-        self.renderer
-            .update_instances(&self.ctx.queue, &self.simulation.bodies);
+        self.renderer.update_camera_3d(&self.ctx.queue, &self.camera);
+
+        // Create qubit visualizations
+        let mut points: Vec<PointInstance> = Vec::new();
+
+        for qubit in &self.simulation.qubits {
+            points.push(PointInstance {
+                position: [qubit.position.x, qubit.position.y, qubit.position.z],
+                size: 0.5,
+                color: qubit.color,
+            });
+
+            let tip = qubit.position + qubit.bloch_vector * 0.6;
+            points.push(PointInstance {
+                position: [tip.x, tip.y, tip.z],
+                size: 0.15,
+                color: [1.0, 1.0, 1.0, 1.0],
+            });
+        }
+
+        self.renderer.update_points(&self.ctx.queue, &points);
+
+        let lines: Vec<(Vec3, Vec3, [f32; 4])> = self.simulation.entanglement_links
+            .iter()
+            .map(|link| {
+                let p1 = self.simulation.qubits[link.qubit_a].position;
+                let p2 = self.simulation.qubits[link.qubit_b].position;
+                (p1, p2, link.color)
+            })
+            .collect();
+
+        self.renderer.update_lines(&self.ctx.queue, &lines);
 
         // Build egui UI
         let raw_input = self.egui.state.take_egui_input(&self.ctx.window);
         let full_output = self.egui.ctx.run(raw_input, |ctx| {
             draw_equations_sidebar(
                 ctx,
-                "Gravity Simulation",
-                GRAVITY_EQUATIONS,
-                GRAVITY_VARIABLES,
+                "Quantum Teleportation",
+                TELEPORTATION_EQUATIONS,
+                TELEPORTATION_VARIABLES,
             );
 
             egui::TopBottomPanel::top("status").show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(format!("Bodies: {}", self.simulation.bodies.len()));
+                    ui.label(egui::RichText::new(self.simulation.stage_description())
+                        .color(egui::Color32::WHITE));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(format!("Fidelity: {:.3}", self.simulation.fidelity));
                     ui.separator();
-                    let preset_name = match self.current_preset {
-                        1 => "Solar System",
-                        2 => "Accretion Disk",
-                        3 => "Galaxy Collision",
-                        _ => "Custom",
-                    };
-                    ui.label(format!("Preset: {}", preset_name));
-                    ui.separator();
-                    if self.paused {
-                        ui.label(egui::RichText::new("PAUSED").color(egui::Color32::YELLOW));
-                    } else {
-                        ui.label(egui::RichText::new("RUNNING").color(egui::Color32::GREEN));
-                    }
+                    ui.label("Press Space/Enter to advance");
                 });
             });
         });
@@ -164,7 +172,9 @@ impl App {
             });
 
         self.renderer
-            .render(&mut encoder, &view, self.simulation.bodies.len() as u32);
+            .render_lines(&mut encoder, &view, lines.len() as u32, true);
+        self.renderer
+            .render_points(&mut encoder, &view, points.len() as u32, false);
 
         self.egui.renderer.update_buffers(
             &self.ctx.device,
@@ -207,44 +217,22 @@ impl App {
         }
 
         match key {
-            KeyCode::Space => self.paused = !self.paused,
-            KeyCode::KeyR => self.load_preset(self.current_preset),
-            KeyCode::Digit1 => self.load_preset(1),
-            KeyCode::Digit2 => self.load_preset(2),
-            KeyCode::Digit3 => self.load_preset(3),
-            KeyCode::ArrowUp | KeyCode::KeyW => self.camera.position.y += self.camera.zoom * 0.1,
-            KeyCode::ArrowDown | KeyCode::KeyS => self.camera.position.y -= self.camera.zoom * 0.1,
-            KeyCode::ArrowLeft | KeyCode::KeyA => self.camera.position.x -= self.camera.zoom * 0.1,
-            KeyCode::ArrowRight | KeyCode::KeyD => self.camera.position.x += self.camera.zoom * 0.1,
+            KeyCode::Space | KeyCode::Enter => self.simulation.next_stage(),
+            KeyCode::KeyR => self.simulation.reset(),
+            KeyCode::Digit1 => self.simulation.set_state_to_teleport(0.0, 0.0),
+            KeyCode::Digit2 => self.simulation.set_state_to_teleport(PI, 0.0),
+            KeyCode::Digit3 => self.simulation.set_state_to_teleport(PI / 2.0, 0.0),
+            KeyCode::Digit4 => self.simulation.set_state_to_teleport(PI / 3.0, PI / 4.0),
+            KeyCode::ArrowLeft => self.camera.orbit(-0.1, 0.0),
+            KeyCode::ArrowRight => self.camera.orbit(0.1, 0.0),
+            KeyCode::ArrowUp => self.camera.orbit(0.0, 0.1),
+            KeyCode::ArrowDown => self.camera.orbit(0.0, -0.1),
             _ => {}
         }
     }
 
     fn handle_scroll(&mut self, delta: f32) {
-        self.camera.zoom *= 1.0 - delta * 0.1;
-        self.camera.zoom = self.camera.zoom.clamp(1.0, 100.0);
-    }
-
-    fn load_preset(&mut self, preset: u8) {
-        self.current_preset = preset;
-        match preset {
-            1 => {
-                self.simulation.init_solar_system();
-                self.camera.zoom = 15.0;
-                self.camera.position = Vec3::ZERO;
-            }
-            2 => {
-                self.simulation.init_disk(500);
-                self.camera.zoom = 20.0;
-                self.camera.position = Vec3::ZERO;
-            }
-            3 => {
-                self.simulation.init_galaxy_collision(300);
-                self.camera.zoom = 25.0;
-                self.camera.position = Vec3::ZERO;
-            }
-            _ => {}
-        }
+        self.camera.zoom(delta);
     }
 
     fn handle_window_event(&mut self, event: &WindowEvent) -> bool {
@@ -254,7 +242,7 @@ impl App {
 
 fn main() {
     let (ctx, event_loop) = pollster::block_on(GraphicsContext::new(
-        "Gravity Simulation - Rust/wgpu",
+        "Quantum Teleportation - Bell State Protocol",
         1280,
         720,
     ));

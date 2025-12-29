@@ -1,34 +1,34 @@
-//! 2D N-body Gravity Simulation
+//! Quantum Hall Effect Visualization
 //!
-//! A real-time gravitational simulation using Newtonian physics,
-//! rendered with wgpu. Features include:
-//! - N-body gravitational interactions
-//! - Multiple preset configurations (solar system, disk, galaxy collision)
-//! - Interactive camera controls
+//! Simulates 2D electron gas in a magnetic field showing Landau levels and edge states.
 //!
 //! Controls:
-//! - Scroll: Zoom in/out
-//! - Arrow keys / WASD: Pan camera
-//! - Space: Pause/resume simulation
-//! - 1/2/3: Load different presets
-//! - R: Reset current simulation
+//! - Space: Pause/resume
+//! - Up/Down: Adjust magnetic field
+//! - +/-: Add/remove electrons
+//! - 1/2: Preset filling factors ν=1 and ν=2
 
-mod physics;
+mod wavefunction;
+mod quantum_state;
+mod tunneling;
+mod orbitals;
+mod teleportation;
+mod quarks;
+mod hall_effect;
+mod hypercube;
 mod renderer;
 mod equations_ui;
 
 use common::{Camera2D, GraphicsContext};
 use glam::Vec3;
-use physics::Simulation;
-use renderer::Renderer;
-use equations_ui::{draw_equations_sidebar, GRAVITY_EQUATIONS, GRAVITY_VARIABLES};
+use hall_effect::HallSimulation;
+use renderer::{QuantumRenderer, PointInstance};
+use equations_ui::{draw_equations_sidebar, HALL_EQUATIONS, HALL_VARIABLES};
 use winit::{
     event::{ElementState, Event, KeyEvent, MouseScrollDelta, WindowEvent},
     event_loop::ControlFlow,
     keyboard::{KeyCode, PhysicalKey},
 };
-
-const MAX_PARTICLES: usize = 2000;
 
 struct EguiState {
     ctx: egui::Context,
@@ -38,24 +38,20 @@ struct EguiState {
 
 struct App {
     ctx: GraphicsContext,
-    renderer: Renderer,
-    simulation: Simulation,
+    renderer: QuantumRenderer,
+    simulation: HallSimulation,
     camera: Camera2D,
     paused: bool,
-    current_preset: u8,
     egui: EguiState,
 }
 
 impl App {
     fn new(ctx: GraphicsContext) -> Self {
-        let renderer = Renderer::new(&ctx, MAX_PARTICLES);
-        let camera = Camera2D::new(ctx.aspect_ratio());
+        let renderer = QuantumRenderer::new(&ctx, 500, 200);
+        let mut camera = Camera2D::new(ctx.aspect_ratio());
+        camera.zoom = 8.0;
 
-        let mut simulation = Simulation::new();
-        simulation.init_solar_system();
-
-        let mut camera = camera;
-        camera.zoom = 15.0;
+        let simulation = HallSimulation::default();
 
         let egui_ctx = egui::Context::default();
         let egui_state = egui_winit::State::new(
@@ -78,7 +74,6 @@ impl App {
             simulation,
             camera,
             paused: false,
-            current_preset: 1,
             egui: EguiState {
                 ctx: egui_ctx,
                 state: egui_state,
@@ -92,14 +87,9 @@ impl App {
         self.camera.update_aspect_ratio(self.ctx.aspect_ratio());
     }
 
-    fn update(&mut self, _dt: f32) {
+    fn update(&mut self, dt: f32) {
         if !self.paused {
-            // Substep for stability
-            let substeps = 4;
-            let sub_dt = _dt / substeps as f32;
-            for _ in 0..substeps {
-                self.simulation.step(sub_dt);
-            }
+            self.simulation.step(dt);
         }
     }
 
@@ -109,37 +99,67 @@ impl App {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Update GPU buffers
-        self.renderer.update_camera(&self.ctx.queue, &self.camera);
-        self.renderer
-            .update_instances(&self.ctx.queue, &self.simulation.bodies);
+        self.renderer.update_camera_2d(&self.ctx.queue, &self.camera);
+
+        let electron_data = self.simulation.get_electron_data();
+        let points: Vec<PointInstance> = electron_data
+            .iter()
+            .map(|(pos, color, is_edge)| {
+                let size = if *is_edge { 0.15 } else { 0.1 };
+                PointInstance {
+                    position: [pos.x, pos.y, 0.0],
+                    size,
+                    color: *color,
+                }
+            })
+            .collect();
+
+        self.renderer.update_points(&self.ctx.queue, &points);
+
+        let orbits = self.simulation.get_orbits();
+        let mut lines: Vec<(Vec3, Vec3, [f32; 4])> = Vec::new();
+
+        for (center, radius, color) in orbits.iter().take(20) {
+            let segments = 16;
+            for i in 0..segments {
+                let a1 = i as f32 * 2.0 * std::f32::consts::PI / segments as f32;
+                let a2 = (i + 1) as f32 * 2.0 * std::f32::consts::PI / segments as f32;
+                let p1 = Vec3::new(center.x + radius * a1.cos(), center.y + radius * a1.sin(), 0.0);
+                let p2 = Vec3::new(center.x + radius * a2.cos(), center.y + radius * a2.sin(), 0.0);
+                lines.push((p1, p2, [color[0], color[1], color[2], 0.3]));
+            }
+        }
+
+        let hw = self.simulation.width / 2.0;
+        let hh = self.simulation.height / 2.0;
+        lines.push((Vec3::new(-hw, -hh, 0.0), Vec3::new(hw, -hh, 0.0), [0.5, 0.5, 0.5, 0.5]));
+        lines.push((Vec3::new(hw, -hh, 0.0), Vec3::new(hw, hh, 0.0), [0.5, 0.5, 0.5, 0.5]));
+        lines.push((Vec3::new(hw, hh, 0.0), Vec3::new(-hw, hh, 0.0), [0.5, 0.5, 0.5, 0.5]));
+        lines.push((Vec3::new(-hw, hh, 0.0), Vec3::new(-hw, -hh, 0.0), [0.5, 0.5, 0.5, 0.5]));
+
+        self.renderer.update_lines(&self.ctx.queue, &lines);
 
         // Build egui UI
         let raw_input = self.egui.state.take_egui_input(&self.ctx.window);
         let full_output = self.egui.ctx.run(raw_input, |ctx| {
             draw_equations_sidebar(
                 ctx,
-                "Gravity Simulation",
-                GRAVITY_EQUATIONS,
-                GRAVITY_VARIABLES,
+                "Quantum Hall Effect",
+                HALL_EQUATIONS,
+                HALL_VARIABLES,
             );
 
             egui::TopBottomPanel::top("status").show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(format!("Bodies: {}", self.simulation.bodies.len()));
+                    ui.label(format!("B = {:.2} T", self.simulation.magnetic_field));
                     ui.separator();
-                    let preset_name = match self.current_preset {
-                        1 => "Solar System",
-                        2 => "Accretion Disk",
-                        3 => "Galaxy Collision",
-                        _ => "Custom",
-                    };
-                    ui.label(format!("Preset: {}", preset_name));
+                    ui.label(format!("ν = {:.2}", self.simulation.filling_factor));
                     ui.separator();
+                    ui.label(format!("σ_xy = {:.0} e²/h", self.simulation.hall_conductance));
+                    ui.separator();
+                    ui.label(format!("Electrons: {}", self.simulation.electrons.len()));
                     if self.paused {
                         ui.label(egui::RichText::new("PAUSED").color(egui::Color32::YELLOW));
-                    } else {
-                        ui.label(egui::RichText::new("RUNNING").color(egui::Color32::GREEN));
                     }
                 });
             });
@@ -164,7 +184,9 @@ impl App {
             });
 
         self.renderer
-            .render(&mut encoder, &view, self.simulation.bodies.len() as u32);
+            .render_lines(&mut encoder, &view, lines.len() as u32, true);
+        self.renderer
+            .render_points(&mut encoder, &view, points.len() as u32, false);
 
         self.egui.renderer.update_buffers(
             &self.ctx.device,
@@ -206,45 +228,37 @@ impl App {
             return;
         }
 
+        let n_electrons = self.simulation.electrons.len();
+
         match key {
             KeyCode::Space => self.paused = !self.paused,
-            KeyCode::KeyR => self.load_preset(self.current_preset),
-            KeyCode::Digit1 => self.load_preset(1),
-            KeyCode::Digit2 => self.load_preset(2),
-            KeyCode::Digit3 => self.load_preset(3),
-            KeyCode::ArrowUp | KeyCode::KeyW => self.camera.position.y += self.camera.zoom * 0.1,
-            KeyCode::ArrowDown | KeyCode::KeyS => self.camera.position.y -= self.camera.zoom * 0.1,
-            KeyCode::ArrowLeft | KeyCode::KeyA => self.camera.position.x -= self.camera.zoom * 0.1,
-            KeyCode::ArrowRight | KeyCode::KeyD => self.camera.position.x += self.camera.zoom * 0.1,
+            KeyCode::ArrowUp => {
+                self.simulation.set_magnetic_field(self.simulation.magnetic_field + 0.2);
+            }
+            KeyCode::ArrowDown => {
+                self.simulation.set_magnetic_field(self.simulation.magnetic_field - 0.2);
+            }
+            KeyCode::Equal => {
+                self.simulation.fill_electrons(n_electrons + 10);
+            }
+            KeyCode::Minus => {
+                if n_electrons > 10 {
+                    self.simulation.fill_electrons(n_electrons - 10);
+                }
+            }
+            KeyCode::Digit1 => {
+                self.simulation = HallSimulation::preset_nu_1();
+            }
+            KeyCode::Digit2 => {
+                self.simulation = HallSimulation::preset_nu_2();
+            }
             _ => {}
         }
     }
 
     fn handle_scroll(&mut self, delta: f32) {
         self.camera.zoom *= 1.0 - delta * 0.1;
-        self.camera.zoom = self.camera.zoom.clamp(1.0, 100.0);
-    }
-
-    fn load_preset(&mut self, preset: u8) {
-        self.current_preset = preset;
-        match preset {
-            1 => {
-                self.simulation.init_solar_system();
-                self.camera.zoom = 15.0;
-                self.camera.position = Vec3::ZERO;
-            }
-            2 => {
-                self.simulation.init_disk(500);
-                self.camera.zoom = 20.0;
-                self.camera.position = Vec3::ZERO;
-            }
-            3 => {
-                self.simulation.init_galaxy_collision(300);
-                self.camera.zoom = 25.0;
-                self.camera.position = Vec3::ZERO;
-            }
-            _ => {}
-        }
+        self.camera.zoom = self.camera.zoom.clamp(2.0, 20.0);
     }
 
     fn handle_window_event(&mut self, event: &WindowEvent) -> bool {
@@ -254,7 +268,7 @@ impl App {
 
 fn main() {
     let (ctx, event_loop) = pollster::block_on(GraphicsContext::new(
-        "Gravity Simulation - Rust/wgpu",
+        "Quantum Hall Effect - Landau Levels",
         1280,
         720,
     ));

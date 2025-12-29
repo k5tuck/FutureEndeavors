@@ -24,6 +24,7 @@ mod solar_system;
 mod spaceship;
 mod spacetime;
 mod renderer;
+mod equations_ui;
 
 use common::{Camera3D, GraphicsContext};
 use glam::Vec3;
@@ -31,6 +32,7 @@ use solar_system::SolarSystem;
 use spaceship::Spaceship;
 use spacetime::SpacetimeGrid;
 use renderer::Renderer;
+use equations_ui::{draw_equations_sidebar, SOLAR_VOYAGE_EQUATIONS, SOLAR_VOYAGE_VARIABLES};
 use winit::{
     event::{ElementState, Event, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::ControlFlow,
@@ -42,6 +44,12 @@ enum CameraMode {
     Orbit,
     FollowShip,
     ShipView,
+}
+
+struct EguiState {
+    ctx: egui::Context,
+    state: egui_winit::State,
+    renderer: egui_wgpu::Renderer,
 }
 
 struct App {
@@ -64,6 +72,9 @@ struct App {
     show_trails: bool,
     has_black_hole: bool,
     focused_body: Option<usize>,
+
+    // UI
+    egui: EguiState,
 }
 
 #[derive(Default)]
@@ -101,6 +112,21 @@ impl App {
         let mut spacetime_grid = SpacetimeGrid::new(40, 35.0);
         spacetime_grid.deformation_scale = 50.0;
 
+        let egui_ctx = egui::Context::default();
+        let egui_state = egui_winit::State::new(
+            egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            &ctx.window,
+            Some(ctx.window.scale_factor() as f32),
+            None,
+        );
+        let egui_renderer = egui_wgpu::Renderer::new(
+            &ctx.device,
+            ctx.config.format,
+            None,
+            1,
+        );
+
         Self {
             ctx,
             renderer,
@@ -117,6 +143,11 @@ impl App {
             show_trails: true,
             has_black_hole: false,
             focused_body: None,
+            egui: EguiState {
+                ctx: egui_ctx,
+                state: egui_state,
+                renderer: egui_renderer,
+            },
         }
     }
 
@@ -210,6 +241,51 @@ impl App {
             grid,
         );
 
+        // Build egui UI
+        let raw_input = self.egui.state.take_egui_input(&self.ctx.window);
+        let lorentz = self.spaceship.lorentz_factor();
+        let full_output = self.egui.ctx.run(raw_input, |ctx| {
+            draw_equations_sidebar(
+                ctx,
+                "Orbital Mechanics & Relativity",
+                SOLAR_VOYAGE_EQUATIONS,
+                SOLAR_VOYAGE_VARIABLES,
+            );
+
+            egui::TopBottomPanel::top("status").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Time: {:.2} years", self.solar_system.time));
+                    ui.separator();
+                    ui.label(format!("Speed: {:.4}c", self.spaceship.velocity.length()));
+                    ui.separator();
+                    ui.label(format!("γ: {:.3}", lorentz));
+                    ui.separator();
+                    ui.label(format!("Camera: {:?}", self.camera_mode));
+                    ui.separator();
+                    if self.paused {
+                        ui.label(egui::RichText::new("PAUSED").color(egui::Color32::YELLOW));
+                    } else {
+                        ui.label(egui::RichText::new("RUNNING").color(egui::Color32::GREEN));
+                    }
+                    if self.has_black_hole {
+                        ui.separator();
+                        ui.label(egui::RichText::new("BLACK HOLE").color(egui::Color32::RED));
+                    }
+                });
+            });
+        });
+
+        self.egui.state.handle_platform_output(&self.ctx.window, full_output.platform_output);
+        let tris = self.egui.ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        for (id, image_delta) in &full_output.textures_delta.set {
+            self.egui.renderer.update_texture(&self.ctx.device, &self.ctx.queue, *id, image_delta);
+        }
+
+        let screen_descriptor = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [self.ctx.size.width, self.ctx.size.height],
+            pixels_per_point: full_output.pixels_per_point,
+        };
+
         let mut encoder = self.ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
@@ -221,6 +297,35 @@ impl App {
             self.show_grid,
             self.show_trails,
         );
+
+        self.egui.renderer.update_buffers(
+            &self.ctx.device,
+            &self.ctx.queue,
+            &mut encoder,
+            &tris,
+            &screen_descriptor,
+        );
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Egui Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            self.egui.renderer.render(&mut render_pass, &tris, &screen_descriptor);
+        }
+
+        for id in &full_output.textures_delta.free {
+            self.egui.renderer.free_texture(id);
+        }
 
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
         output.present();
@@ -251,7 +356,6 @@ impl App {
                             CameraMode::FollowShip => CameraMode::ShipView,
                             CameraMode::ShipView => CameraMode::Orbit,
                         };
-                        println!("Camera: {:?}", self.camera_mode);
                     }
                     KeyCode::KeyG => self.show_grid = !self.show_grid,
                     KeyCode::KeyT => self.show_trails = !self.show_trails,
@@ -260,7 +364,6 @@ impl App {
                             // Remove black hole (keep only first 9 bodies)
                             self.solar_system.bodies.truncate(9);
                             self.has_black_hole = false;
-                            println!("Black hole removed");
                         } else {
                             // Add a stellar-mass black hole approaching the solar system
                             self.solar_system.add_black_hole(
@@ -269,16 +372,13 @@ impl App {
                                 Vec3::new(-2.0, -0.2, -1.0),
                             );
                             self.has_black_hole = true;
-                            println!("Black hole added! Mass: 10 solar masses");
                         }
                     }
                     KeyCode::Equal | KeyCode::NumpadAdd => {
                         self.solar_system.time_scale *= 2.0;
-                        println!("Time scale: {:.1}x", self.solar_system.time_scale);
                     }
                     KeyCode::Minus | KeyCode::NumpadSubtract => {
                         self.solar_system.time_scale /= 2.0;
-                        println!("Time scale: {:.1}x", self.solar_system.time_scale);
                     }
                     // Focus on bodies
                     KeyCode::Digit0 => {
@@ -325,31 +425,13 @@ impl App {
             self.camera.zoom(delta * self.camera.distance * 0.1);
         }
     }
+
+    fn handle_window_event(&mut self, event: &WindowEvent) -> bool {
+        self.egui.state.on_window_event(&self.ctx.window, event).consumed
+    }
 }
 
 fn main() {
-    println!("╔═══════════════════════════════════════════════════════════╗");
-    println!("║           SOLAR VOYAGE - Interstellar Journey             ║");
-    println!("╠═══════════════════════════════════════════════════════════╣");
-    println!("║ Controls:                                                 ║");
-    println!("║   WASD      - Rotate spaceship                           ║");
-    println!("║   R/F       - Pitch up/down                              ║");
-    println!("║   Q/E       - Roll left/right                            ║");
-    println!("║   W+Shift   - Boost thrust                               ║");
-    println!("║   Tab       - Toggle camera mode                         ║");
-    println!("║   Space     - Pause/Resume                               ║");
-    println!("║   G         - Toggle spacetime grid                      ║");
-    println!("║   T         - Toggle orbital trails                      ║");
-    println!("║   B         - Add/Remove black hole                      ║");
-    println!("║   0-3       - Focus on celestial body                    ║");
-    println!("║   +/-       - Adjust time scale                          ║");
-    println!("║   Scroll    - Zoom                                       ║");
-    println!("║   Drag      - Orbit camera                               ║");
-    println!("╚═══════════════════════════════════════════════════════════╝");
-    println!();
-    println!("Starting simulation...");
-    println!();
-
     let (ctx, event_loop) = pollster::block_on(GraphicsContext::new(
         "Solar Voyage - Interstellar Journey",
         1280,
@@ -358,73 +440,63 @@ fn main() {
 
     let mut app = App::new(ctx);
     let mut last_time = std::time::Instant::now();
-    let mut frame_count = 0u32;
-    let mut fps_timer = std::time::Instant::now();
 
     event_loop
         .run(move |event, elwt| {
             elwt.set_control_flow(ControlFlow::Poll);
 
             match event {
-                Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::CloseRequested => elwt.exit(),
-                    WindowEvent::Resized(size) => app.resize(size),
-                    WindowEvent::MouseInput { state, button, .. } => {
-                        if button == MouseButton::Left {
-                            app.mouse_pressed = state == ElementState::Pressed;
-                            if !app.mouse_pressed {
-                                app.last_mouse_pos = None;
+                Event::WindowEvent { ref event, .. } => {
+                    let consumed = app.handle_window_event(event);
+
+                    if !consumed {
+                        match event {
+                            WindowEvent::CloseRequested => elwt.exit(),
+                            WindowEvent::Resized(size) => app.resize(*size),
+                            WindowEvent::MouseInput { state, button, .. } => {
+                                if *button == MouseButton::Left {
+                                    app.mouse_pressed = *state == ElementState::Pressed;
+                                    if !app.mouse_pressed {
+                                        app.last_mouse_pos = None;
+                                    }
+                                }
                             }
+                            WindowEvent::CursorMoved { position, .. } => {
+                                app.handle_mouse_move(position.x, position.y);
+                            }
+                            WindowEvent::KeyboardInput {
+                                event: KeyEvent {
+                                    physical_key: PhysicalKey::Code(key),
+                                    state,
+                                    ..
+                                },
+                                ..
+                            } => app.handle_key(*key, *state == ElementState::Pressed),
+                            WindowEvent::MouseWheel { delta, .. } => {
+                                let scroll = match delta {
+                                    MouseScrollDelta::LineDelta(_, y) => *y,
+                                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 100.0,
+                                };
+                                app.handle_scroll(scroll);
+                            }
+                            WindowEvent::RedrawRequested => {
+                                let now = std::time::Instant::now();
+                                let dt = (now - last_time).as_secs_f32().min(0.1);
+                                last_time = now;
+
+                                app.update(dt);
+
+                                match app.render() {
+                                    Ok(_) => {}
+                                    Err(wgpu::SurfaceError::Lost) => app.resize(app.ctx.size),
+                                    Err(wgpu::SurfaceError::OutOfMemory) => elwt.exit(),
+                                    Err(e) => eprintln!("Render error: {:?}", e),
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    WindowEvent::CursorMoved { position, .. } => {
-                        app.handle_mouse_move(position.x, position.y);
-                    }
-                    WindowEvent::KeyboardInput {
-                        event: KeyEvent {
-                            physical_key: PhysicalKey::Code(key),
-                            state,
-                            ..
-                        },
-                        ..
-                    } => app.handle_key(key, state == ElementState::Pressed),
-                    WindowEvent::MouseWheel { delta, .. } => {
-                        let scroll = match delta {
-                            MouseScrollDelta::LineDelta(_, y) => y,
-                            MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 100.0,
-                        };
-                        app.handle_scroll(scroll);
-                    }
-                    WindowEvent::RedrawRequested => {
-                        let now = std::time::Instant::now();
-                        let dt = (now - last_time).as_secs_f32().min(0.1);
-                        last_time = now;
-
-                        app.update(dt);
-
-                        match app.render() {
-                            Ok(_) => {}
-                            Err(wgpu::SurfaceError::Lost) => app.resize(app.ctx.size),
-                            Err(wgpu::SurfaceError::OutOfMemory) => elwt.exit(),
-                            Err(e) => eprintln!("Render error: {:?}", e),
-                        }
-
-                        // FPS counter
-                        frame_count += 1;
-                        if fps_timer.elapsed().as_secs_f32() >= 2.0 {
-                            let fps = frame_count as f32 / fps_timer.elapsed().as_secs_f32();
-                            println!(
-                                "FPS: {:.1} | Ship: {} | Time: {:.2} years",
-                                fps,
-                                app.spaceship.info_string().lines().next().unwrap_or(""),
-                                app.solar_system.time
-                            );
-                            frame_count = 0;
-                            fps_timer = std::time::Instant::now();
-                        }
-                    }
-                    _ => {}
-                },
+                }
                 Event::AboutToWait => {
                     app.ctx.window.request_redraw();
                 }

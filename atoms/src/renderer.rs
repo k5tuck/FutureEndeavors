@@ -152,13 +152,13 @@ impl Renderer {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_atom"),
+                entry_point: "vs_atom",
                 buffers: &[QuadVertex::layout(), AtomInstance::layout()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_atom"),
+                entry_point: "fs_atom",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: ctx.config.format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -173,7 +173,6 @@ impl Renderer {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-            cache: None,
         });
 
         // Bond render pipeline
@@ -182,13 +181,13 @@ impl Renderer {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_bond"),
+                entry_point: "vs_bond",
                 buffers: &[BondVertex::layout()],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_bond"),
+                entry_point: "fs_bond",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: ctx.config.format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -203,7 +202,6 @@ impl Renderer {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-            cache: None,
         });
 
         // Grid pipeline
@@ -212,13 +210,13 @@ impl Renderer {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("vs_grid"),
+                entry_point: "vs_grid",
                 buffers: &[],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_grid"),
+                entry_point: "fs_grid",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: ctx.config.format,
                     blend: None,
@@ -233,7 +231,6 @@ impl Renderer {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
-            cache: None,
         });
 
         // Quad vertex buffer
