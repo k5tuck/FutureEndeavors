@@ -1,6 +1,0 @@
----
-hide:
-  - footer
----
-
-# Shiplem Studios

@@ -1,0 +1,20 @@
+[package]
+name = "atoms"
+version.workspace = true
+edition.workspace = true
+description = "Atomic and molecular dynamics simulation with real-time visualization"
+
+[[bin]]
+name = "atoms"
+path = "src/main.rs"
+
+[dependencies]
+common.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+glam.workspace = true
+bytemuck.workspace = true
+pollster.workspace = true
+env_logger.workspace = true
+log.workspace = true
+rand.workspace = true
