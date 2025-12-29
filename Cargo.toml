@@ -4,6 +4,7 @@ members = [
     "gravity_sim",
     "black_hole",
     "atoms",
+    "solar_voyage",
     "common",
 ]
 

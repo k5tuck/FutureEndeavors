@@ -1,0 +1,21 @@
+[package]
+name = "solar_voyage"
+version.workspace = true
+edition.workspace = true
+description = "Interstellar voyage simulation with accurate solar system, black holes, and relativistic spaceship"
+
+[[bin]]
+name = "solar_voyage"
+path = "src/main.rs"
+
+[dependencies]
+common.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+glam.workspace = true
+nalgebra.workspace = true
+bytemuck.workspace = true
+pollster.workspace = true
+env_logger.workspace = true
+log.workspace = true
+rand.workspace = true
