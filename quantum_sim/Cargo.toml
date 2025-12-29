@@ -42,3 +42,8 @@ pollster.workspace = true
 env_logger.workspace = true
 log.workspace = true
 rand.workspace = true
+
+# UI for equation sidebars (0.28 is compatible with wgpu 0.20)
+egui = "0.28"
+egui-wgpu = "0.28"
+egui-winit = "0.28"

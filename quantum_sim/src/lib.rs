@@ -18,6 +18,7 @@ pub mod quarks;
 pub mod hall_effect;
 pub mod hypercube;
 pub mod renderer;
+pub mod equations_ui;
 
 /// Physical constants for quantum simulations
 pub mod constants {

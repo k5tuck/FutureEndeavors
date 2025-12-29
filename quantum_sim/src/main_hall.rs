@@ -6,7 +6,6 @@
 //! - Space: Pause/resume
 //! - Up/Down: Adjust magnetic field
 //! - +/-: Add/remove electrons
-//! - E: Toggle edge states visibility
 //! - 1/2: Preset filling factors ν=1 and ν=2
 
 mod wavefunction;
@@ -18,16 +17,24 @@ mod quarks;
 mod hall_effect;
 mod hypercube;
 mod renderer;
+mod equations_ui;
 
 use common::{Camera2D, GraphicsContext};
 use glam::Vec3;
 use hall_effect::HallSimulation;
 use renderer::{QuantumRenderer, PointInstance};
+use equations_ui::{draw_equations_sidebar, HALL_EQUATIONS, HALL_VARIABLES};
 use winit::{
     event::{ElementState, Event, KeyEvent, MouseScrollDelta, WindowEvent},
     event_loop::ControlFlow,
     keyboard::{KeyCode, PhysicalKey},
 };
+
+struct EguiState {
+    ctx: egui::Context,
+    state: egui_winit::State,
+    renderer: egui_wgpu::Renderer,
+}
 
 struct App {
     ctx: GraphicsContext,
@@ -35,6 +42,7 @@ struct App {
     simulation: HallSimulation,
     camera: Camera2D,
     paused: bool,
+    egui: EguiState,
 }
 
 impl App {
@@ -45,12 +53,32 @@ impl App {
 
         let simulation = HallSimulation::default();
 
+        let egui_ctx = egui::Context::default();
+        let egui_state = egui_winit::State::new(
+            egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            &ctx.window,
+            Some(ctx.window.scale_factor() as f32),
+            None,
+        );
+        let egui_renderer = egui_wgpu::Renderer::new(
+            &ctx.device,
+            ctx.config.format,
+            None,
+            1,
+        );
+
         Self {
             ctx,
             renderer,
             simulation,
             camera,
             paused: false,
+            egui: EguiState {
+                ctx: egui_ctx,
+                state: egui_state,
+                renderer: egui_renderer,
+            },
         }
     }
 
@@ -73,7 +101,6 @@ impl App {
 
         self.renderer.update_camera_2d(&self.ctx.queue, &self.camera);
 
-        // Render electrons
         let electron_data = self.simulation.get_electron_data();
         let points: Vec<PointInstance> = electron_data
             .iter()
@@ -89,12 +116,10 @@ impl App {
 
         self.renderer.update_points(&self.ctx.queue, &points);
 
-        // Render cyclotron orbits as lines (for bulk states)
         let orbits = self.simulation.get_orbits();
         let mut lines: Vec<(Vec3, Vec3, [f32; 4])> = Vec::new();
 
         for (center, radius, color) in orbits.iter().take(20) {
-            // Draw orbit as circle segments
             let segments = 16;
             for i in 0..segments {
                 let a1 = i as f32 * 2.0 * std::f32::consts::PI / segments as f32;
@@ -105,7 +130,6 @@ impl App {
             }
         }
 
-        // Sample boundary
         let hw = self.simulation.width / 2.0;
         let hh = self.simulation.height / 2.0;
         lines.push((Vec3::new(-hw, -hh, 0.0), Vec3::new(hw, -hh, 0.0), [0.5, 0.5, 0.5, 0.5]));
@@ -114,6 +138,43 @@ impl App {
         lines.push((Vec3::new(-hw, hh, 0.0), Vec3::new(-hw, -hh, 0.0), [0.5, 0.5, 0.5, 0.5]));
 
         self.renderer.update_lines(&self.ctx.queue, &lines);
+
+        // Build egui UI
+        let raw_input = self.egui.state.take_egui_input(&self.ctx.window);
+        let full_output = self.egui.ctx.run(raw_input, |ctx| {
+            draw_equations_sidebar(
+                ctx,
+                "Quantum Hall Effect",
+                HALL_EQUATIONS,
+                HALL_VARIABLES,
+            );
+
+            egui::TopBottomPanel::top("status").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("B = {:.2} T", self.simulation.magnetic_field));
+                    ui.separator();
+                    ui.label(format!("ν = {:.2}", self.simulation.filling_factor));
+                    ui.separator();
+                    ui.label(format!("σ_xy = {:.0} e²/h", self.simulation.hall_conductance));
+                    ui.separator();
+                    ui.label(format!("Electrons: {}", self.simulation.electrons.len()));
+                    if self.paused {
+                        ui.label(egui::RichText::new("PAUSED").color(egui::Color32::YELLOW));
+                    }
+                });
+            });
+        });
+
+        self.egui.state.handle_platform_output(&self.ctx.window, full_output.platform_output);
+        let tris = self.egui.ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        for (id, image_delta) in &full_output.textures_delta.set {
+            self.egui.renderer.update_texture(&self.ctx.device, &self.ctx.queue, *id, image_delta);
+        }
+
+        let screen_descriptor = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [self.ctx.size.width, self.ctx.size.height],
+            pixels_per_point: full_output.pixels_per_point,
+        };
 
         let mut encoder = self
             .ctx
@@ -127,15 +188,37 @@ impl App {
         self.renderer
             .render_points(&mut encoder, &view, points.len() as u32, false);
 
+        self.egui.renderer.update_buffers(
+            &self.ctx.device,
+            &self.ctx.queue,
+            &mut encoder,
+            &tris,
+            &screen_descriptor,
+        );
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Egui Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            self.egui.renderer.render(&mut render_pass, &tris, &screen_descriptor);
+        }
+
+        for id in &full_output.textures_delta.free {
+            self.egui.renderer.free_texture(id);
+        }
+
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
         output.present();
-
-        // Print status
-        println!("\rB={:.2}T  ν={:.2}  σxy={:.0}e²/h  Electrons={}     ",
-                 self.simulation.magnetic_field,
-                 self.simulation.filling_factor,
-                 self.simulation.hall_conductance,
-                 self.simulation.electrons.len());
 
         Ok(())
     }
@@ -177,15 +260,13 @@ impl App {
         self.camera.zoom *= 1.0 - delta * 0.1;
         self.camera.zoom = self.camera.zoom.clamp(2.0, 20.0);
     }
+
+    fn handle_window_event(&mut self, event: &WindowEvent) -> bool {
+        self.egui.state.on_window_event(&self.ctx.window, event).consumed
+    }
 }
 
 fn main() {
-    println!("Quantum Hall Effect Simulation");
-    println!("==============================");
-    println!("Up/Down: Adjust magnetic field");
-    println!("+/-: Add/remove electrons");
-    println!("1/2: Preset ν=1 or ν=2 states\n");
-
     let (ctx, event_loop) = pollster::block_on(GraphicsContext::new(
         "Quantum Hall Effect - Landau Levels",
         1280,
@@ -200,40 +281,46 @@ fn main() {
             elwt.set_control_flow(ControlFlow::Poll);
 
             match event {
-                Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::CloseRequested => elwt.exit(),
-                    WindowEvent::Resized(size) => app.resize(size),
-                    WindowEvent::KeyboardInput {
-                        event:
-                            KeyEvent {
-                                physical_key: PhysicalKey::Code(key),
-                                state,
-                                ..
-                            },
-                        ..
-                    } => app.handle_key(key, state),
-                    WindowEvent::MouseWheel { delta, .. } => {
-                        let scroll = match delta {
-                            MouseScrollDelta::LineDelta(_, y) => y,
-                            MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 100.0,
-                        };
-                        app.handle_scroll(scroll);
-                    }
-                    WindowEvent::RedrawRequested => {
-                        let now = std::time::Instant::now();
-                        let dt = (now - last_time).as_secs_f32().min(0.1);
-                        last_time = now;
+                Event::WindowEvent { ref event, .. } => {
+                    let consumed = app.handle_window_event(event);
 
-                        app.update(dt);
-                        match app.render() {
-                            Ok(_) => {}
-                            Err(wgpu::SurfaceError::Lost) => app.resize(app.ctx.size),
-                            Err(wgpu::SurfaceError::OutOfMemory) => elwt.exit(),
-                            Err(e) => eprintln!("Render error: {:?}", e),
+                    if !consumed {
+                        match event {
+                            WindowEvent::CloseRequested => elwt.exit(),
+                            WindowEvent::Resized(size) => app.resize(*size),
+                            WindowEvent::KeyboardInput {
+                                event:
+                                    KeyEvent {
+                                        physical_key: PhysicalKey::Code(key),
+                                        state,
+                                        ..
+                                    },
+                                ..
+                            } => app.handle_key(*key, *state),
+                            WindowEvent::MouseWheel { delta, .. } => {
+                                let scroll = match delta {
+                                    MouseScrollDelta::LineDelta(_, y) => *y,
+                                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 100.0,
+                                };
+                                app.handle_scroll(scroll);
+                            }
+                            WindowEvent::RedrawRequested => {
+                                let now = std::time::Instant::now();
+                                let dt = (now - last_time).as_secs_f32().min(0.1);
+                                last_time = now;
+
+                                app.update(dt);
+                                match app.render() {
+                                    Ok(_) => {}
+                                    Err(wgpu::SurfaceError::Lost) => app.resize(app.ctx.size),
+                                    Err(wgpu::SurfaceError::OutOfMemory) => elwt.exit(),
+                                    Err(e) => eprintln!("Render error: {:?}", e),
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    _ => {}
-                },
+                }
                 Event::AboutToWait => {
                     app.ctx.window.request_redraw();
                 }

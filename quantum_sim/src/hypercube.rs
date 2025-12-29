@@ -479,6 +479,11 @@ impl Hypercube4DSimulation {
             .map(|(&v, &c)| (v, c))
             .collect()
     }
+
+    /// Get current polytope name
+    pub fn current_polytope_name(&self) -> &str {
+        &self.polytope.name
+    }
 }
 
 impl Default for Hypercube4DSimulation {

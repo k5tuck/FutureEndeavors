@@ -19,16 +19,24 @@ mod quarks;
 mod hall_effect;
 mod hypercube;
 mod renderer;
+mod equations_ui;
 
 use common::{Camera3D, GraphicsContext};
 use glam::Vec3;
 use quarks::QuarkSimulation;
 use renderer::{QuantumRenderer, PointInstance, quarks_to_points};
+use equations_ui::{draw_equations_sidebar, QUARK_EQUATIONS, QUARK_VARIABLES};
 use winit::{
     event::{ElementState, Event, KeyEvent, MouseScrollDelta, WindowEvent},
     event_loop::ControlFlow,
     keyboard::{KeyCode, PhysicalKey},
 };
+
+struct EguiState {
+    ctx: egui::Context,
+    state: egui_winit::State,
+    renderer: egui_wgpu::Renderer,
+}
 
 struct App {
     ctx: GraphicsContext,
@@ -36,6 +44,7 @@ struct App {
     simulation: QuarkSimulation,
     camera: Camera3D,
     paused: bool,
+    egui: EguiState,
 }
 
 impl App {
@@ -47,12 +56,32 @@ impl App {
         let mut simulation = QuarkSimulation::new();
         simulation.init_proton();
 
+        let egui_ctx = egui::Context::default();
+        let egui_state = egui_winit::State::new(
+            egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            &ctx.window,
+            Some(ctx.window.scale_factor() as f32),
+            None,
+        );
+        let egui_renderer = egui_wgpu::Renderer::new(
+            &ctx.device,
+            ctx.config.format,
+            None,
+            1,
+        );
+
         Self {
             ctx,
             renderer,
             simulation,
             camera,
             paused: false,
+            egui: EguiState {
+                ctx: egui_ctx,
+                state: egui_state,
+                renderer: egui_renderer,
+            },
         }
     }
 
@@ -75,12 +104,10 @@ impl App {
 
         self.renderer.update_camera_3d(&self.ctx.queue, &self.camera);
 
-        // Render quarks
         let quark_data = self.simulation.get_quark_data();
         let points = quarks_to_points(&quark_data);
         self.renderer.update_points(&self.ctx.queue, &points);
 
-        // Render flux tubes
         let mut lines: Vec<(Vec3, Vec3, [f32; 4])> = Vec::new();
         for tube in &self.simulation.flux_tubes {
             let p1 = self.simulation.quarks[tube.quark_a].position;
@@ -88,7 +115,6 @@ impl App {
             lines.push((p1, p2, tube.color_flow));
         }
 
-        // Render gluons as small connecting lines
         for gluon in &self.simulation.gluons {
             let color = [
                 (gluon.color.render_color()[0] + gluon.anticolor.render_color()[0]) / 2.0,
@@ -105,6 +131,42 @@ impl App {
 
         self.renderer.update_lines(&self.ctx.queue, &lines);
 
+        // Build egui UI
+        let raw_input = self.egui.state.take_egui_input(&self.ctx.window);
+        let hadron_name = self.simulation.hadron_type.map(|h| h.name()).unwrap_or("None");
+        let full_output = self.egui.ctx.run(raw_input, |ctx| {
+            draw_equations_sidebar(
+                ctx,
+                "Quarks & QCD",
+                QUARK_EQUATIONS,
+                QUARK_VARIABLES,
+            );
+
+            egui::TopBottomPanel::top("status").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Hadron: {}", hadron_name));
+                    ui.separator();
+                    ui.label(format!("Quarks: {}", self.simulation.quarks.len()));
+                    ui.separator();
+                    ui.label(format!("Gluons: {}", self.simulation.gluons.len()));
+                    if self.paused {
+                        ui.label(egui::RichText::new("PAUSED").color(egui::Color32::YELLOW));
+                    }
+                });
+            });
+        });
+
+        self.egui.state.handle_platform_output(&self.ctx.window, full_output.platform_output);
+        let tris = self.egui.ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        for (id, image_delta) in &full_output.textures_delta.set {
+            self.egui.renderer.update_texture(&self.ctx.device, &self.ctx.queue, *id, image_delta);
+        }
+
+        let screen_descriptor = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [self.ctx.size.width, self.ctx.size.height],
+            pixels_per_point: full_output.pixels_per_point,
+        };
+
         let mut encoder = self
             .ctx
             .device
@@ -116,6 +178,35 @@ impl App {
             .render_lines(&mut encoder, &view, lines.len() as u32, true);
         self.renderer
             .render_points(&mut encoder, &view, points.len() as u32, false);
+
+        self.egui.renderer.update_buffers(
+            &self.ctx.device,
+            &self.ctx.queue,
+            &mut encoder,
+            &tris,
+            &screen_descriptor,
+        );
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Egui Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            self.egui.renderer.render(&mut render_pass, &tris, &screen_descriptor);
+        }
+
+        for id in &full_output.textures_delta.free {
+            self.egui.renderer.free_texture(id);
+        }
 
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
         output.present();
@@ -145,16 +236,13 @@ impl App {
     fn handle_scroll(&mut self, delta: f32) {
         self.camera.zoom(delta);
     }
+
+    fn handle_window_event(&mut self, event: &WindowEvent) -> bool {
+        self.egui.state.on_window_event(&self.ctx.window, event).consumed
+    }
 }
 
 fn main() {
-    println!("Quark Confinement Simulation");
-    println!("============================");
-    println!("Press 1: Proton (uud)");
-    println!("Press 2: Neutron (udd)");
-    println!("Press 3: Pion+ (ud̄)");
-    println!("Press 4: J/ψ (cc̄)\n");
-
     let (ctx, event_loop) = pollster::block_on(GraphicsContext::new(
         "Quarks & Hadrons - QCD Visualization",
         1280,
@@ -169,40 +257,46 @@ fn main() {
             elwt.set_control_flow(ControlFlow::Poll);
 
             match event {
-                Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::CloseRequested => elwt.exit(),
-                    WindowEvent::Resized(size) => app.resize(size),
-                    WindowEvent::KeyboardInput {
-                        event:
-                            KeyEvent {
-                                physical_key: PhysicalKey::Code(key),
-                                state,
-                                ..
-                            },
-                        ..
-                    } => app.handle_key(key, state),
-                    WindowEvent::MouseWheel { delta, .. } => {
-                        let scroll = match delta {
-                            MouseScrollDelta::LineDelta(_, y) => y,
-                            MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 100.0,
-                        };
-                        app.handle_scroll(scroll);
-                    }
-                    WindowEvent::RedrawRequested => {
-                        let now = std::time::Instant::now();
-                        let dt = (now - last_time).as_secs_f32().min(0.1);
-                        last_time = now;
+                Event::WindowEvent { ref event, .. } => {
+                    let consumed = app.handle_window_event(event);
 
-                        app.update(dt);
-                        match app.render() {
-                            Ok(_) => {}
-                            Err(wgpu::SurfaceError::Lost) => app.resize(app.ctx.size),
-                            Err(wgpu::SurfaceError::OutOfMemory) => elwt.exit(),
-                            Err(e) => eprintln!("Render error: {:?}", e),
+                    if !consumed {
+                        match event {
+                            WindowEvent::CloseRequested => elwt.exit(),
+                            WindowEvent::Resized(size) => app.resize(*size),
+                            WindowEvent::KeyboardInput {
+                                event:
+                                    KeyEvent {
+                                        physical_key: PhysicalKey::Code(key),
+                                        state,
+                                        ..
+                                    },
+                                ..
+                            } => app.handle_key(*key, *state),
+                            WindowEvent::MouseWheel { delta, .. } => {
+                                let scroll = match delta {
+                                    MouseScrollDelta::LineDelta(_, y) => *y,
+                                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 100.0,
+                                };
+                                app.handle_scroll(scroll);
+                            }
+                            WindowEvent::RedrawRequested => {
+                                let now = std::time::Instant::now();
+                                let dt = (now - last_time).as_secs_f32().min(0.1);
+                                last_time = now;
+
+                                app.update(dt);
+                                match app.render() {
+                                    Ok(_) => {}
+                                    Err(wgpu::SurfaceError::Lost) => app.resize(app.ctx.size),
+                                    Err(wgpu::SurfaceError::OutOfMemory) => elwt.exit(),
+                                    Err(e) => eprintln!("Render error: {:?}", e),
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    _ => {}
-                },
+                }
                 Event::AboutToWait => {
                     app.ctx.window.request_redraw();
                 }
