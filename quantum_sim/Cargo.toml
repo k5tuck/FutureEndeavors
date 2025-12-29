@@ -1,0 +1,44 @@
+[package]
+name = "quantum_sim"
+version.workspace = true
+edition.workspace = true
+description = "Quantum mechanics simulations with real-time visualization"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "quantum_tunneling"
+path = "src/main_tunneling.rs"
+
+[[bin]]
+name = "quantum_orbitals"
+path = "src/main_orbitals.rs"
+
+[[bin]]
+name = "quantum_teleportation"
+path = "src/main_teleportation.rs"
+
+[[bin]]
+name = "quantum_quarks"
+path = "src/main_quarks.rs"
+
+[[bin]]
+name = "quantum_hall"
+path = "src/main_hall.rs"
+
+[[bin]]
+name = "quantum_4d"
+path = "src/main_4d.rs"
+
+[dependencies]
+common.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+glam.workspace = true
+nalgebra.workspace = true
+bytemuck.workspace = true
+pollster.workspace = true
+env_logger.workspace = true
+log.workspace = true
+rand.workspace = true
