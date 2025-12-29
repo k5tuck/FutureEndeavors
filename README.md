@@ -137,8 +137,44 @@ cargo run -p atoms
 
 ### Prerequisites
 
-- Rust 1.70+ (install via [rustup](https://rustup.rs/))
+- Rust 1.70+
 - A GPU with Vulkan, Metal, DX12, or WebGPU support
+
+#### Check if Rust is Installed
+
+Open a terminal and run:
+
+```bash
+rustc --version
+cargo --version
+```
+
+If both commands display version numbers (e.g., `rustc 1.75.0` and `cargo 1.75.0`), Rust is installed and ready to use.
+
+#### Installing Rust
+
+If Rust is not installed, follow the instructions for your operating system:
+
+**macOS / Linux:**
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+Follow the on-screen prompts (default installation is recommended). After installation, restart your terminal or run:
+```bash
+source $HOME/.cargo/env
+```
+
+**Windows:**
+1. Download the installer from [rustup.rs](https://rustup.rs/) or directly: [rustup-init.exe](https://win.rustup.rs/x86_64)
+2. Run `rustup-init.exe` and follow the prompts
+3. You may need to install the [Visual Studio C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) if prompted
+4. Restart your terminal/command prompt after installation
+
+**Verify Installation:**
+```bash
+rustc --version
+cargo --version
+```
 
 ### Build All
 
